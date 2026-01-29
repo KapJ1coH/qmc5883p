@@ -1,36 +1,10 @@
 #![no_std]
-// Project: Smart Parking Detection and Navigation
-// File: qmc5883p.rs
-// Created: 2025-12-26
-//
-
-// MIT License
-//
-// Copyright (c) 2025 Smart-Parking-Space-Detection-and-Guidance-System
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-//
-//
-// Author: Tim
-//
 
 //! This module provides an asynchronous driver for the QMC5883P 3-Axis Magnetic Sensor using I2C.
+//! # Hardware Details
+//! * **I2C Address**: `0x2C`
+//! * **Chip ID**: `0x80`
+//! * **Register 0x29**: Used for Axis Sign definition (Undocumented in register map, but described in App Examples).
 
 #[cfg(all(feature = "defmt", not(test)))]
 use defmt::{error, info, trace, warn};
@@ -52,6 +26,8 @@ use logging_shim::{error, info, trace, warn};
 
 use embassy_time::Timer;
 use embedded_hal_async::i2c::I2c;
+
+#[cfg(feature = "magnitude")]
 use micromath::F32Ext;
 
 const I2C_ADDR: u8 = 0x2C; //
@@ -69,13 +45,20 @@ const AXIS_DEF_VALUE: u8 = 0x06;
 
 const POLL_READY_LIMIT: usize = 50;
 
+/// Operating mode of the sensor (Datasheet Sec 6.2).
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum Mode {
+    /// Suspend Mode (Default): Very low power (~22uA).
+    /// I2C bus is active, registers can be read/written, but no measurements are taken.
     Suspend = 0b00,
+    /// Normal Mode: Periodic measurements based on the configured ODR (Output Data Rate).
     Normal = 0b01,
+    /// Single Mode: Takes one measurement, updates registers, then automatically transitions to Suspend Mode.
     Single = 0b10,
+    /// Continuous Mode: Continuous measurements at the maximum possible rate (up to 1.5kHz).
+    /// Required for using the Self-Test function.
     Continuous = 0b11,
 }
 
@@ -89,6 +72,10 @@ pub enum OutputDataRate {
     Hz200 = 0b11,
 }
 
+/// Over Sample Ratio (OSR1) - Digital Filter Bandwidth Control.
+///
+/// Larger OSR values lead to smaller filter bandwidth, less in-band noise,
+/// but higher power consumption (Datasheet Sec 9.2.3).
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
@@ -109,14 +96,34 @@ pub enum OverSampleRate {
     Rate8 = 0b11,
 }
 
+/// Magnetic measurement range configuration.
+///
+/// Defines the full-scale range of the sensor and its corresponding sensitivity.
+/// Sensitivity values are derived from the QMC5883P datasheet (Page 5).
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum Range {
+    /// Range: ±2 Gauss (Sensitivity: 15000 LSB/Gauss)
     Gauss2 = 0b11,
+    /// Range: ±8 Gauss (Sensitivity: 3750 LSB/Gauss)
     Gauss8 = 0b10,
+    /// Range: ±12 Gauss (Sensitivity: 2500 LSB/Gauss)
     Gauss12 = 0b01,
+    /// Range: ±30 Gauss (Sensitivity: 1000 LSB/Gauss)
     Gauss30 = 0b00,
+}
+
+impl Range {
+    /// Returns the sensitivity in LSB per Gauss for this range.
+    pub fn sensitivity(&self) -> f32 {
+        match self {
+            Range::Gauss2 => 15000.0,
+            Range::Gauss8 => 3750.0,
+            Range::Gauss12 => 2500.0,
+            Range::Gauss30 => 1000.0,
+        }
+    }
 }
 
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -379,14 +386,14 @@ where
     ///
     /// Uses the sequence defined in the QMC5883P datasheet to perform a self-test:
     ///
-    ///  Write Register 29H by 0x06 (Define the sign for X Y and Z axis)
-    ///  Write Register 0AH by 0x03 (set continuous mode)
-    ///  Check status register 09H[0] ,”1” means ready
-    ///  Read data Register 01H ~ 06H, recording as datax1/datay1/dataz1
-    ///  Write Register 0BH by 0x40(enter self-test function)
-    ///  Waiting 5 millisecond until measurement ends
-    ///  Read data Register 01H ~ 06H, recording as datax2/datay2/dataz2
-    ///  Calculate the delta (datax1-datax2), (datay2-datay1), (dataz2-dataz1)
+    /// - Write Register 29H by 0x06 (Define the sign for X Y and Z axis)
+    /// - Write Register 0AH by 0x03 (set continuous mode)
+    /// - Check status register 09H[0] ,”1” means ready
+    /// - Read data Register 01H ~ 06H, recording as datax1/datay1/dataz1
+    /// - Write Register 0BH by 0x40(enter self-test function)
+    /// - Waiting 5 millisecond until measurement ends
+    /// - Read data Register 01H ~ 06H, recording as datax2/datay2/dataz2
+    /// - Calculate the delta (datax1-datax2), (datay2-datay1), (dataz2-dataz1)
     pub async fn self_test(&mut self) -> Result<bool, QmcError<E>> {
         info!("--- Starting Self-Test ---");
 
@@ -468,9 +475,15 @@ where
 
     /// Reads the magnitude of the magnetic field vector.
     ///
-    /// Returns the value in ticks. Depending on the range setting, you may need to convert this to
-    /// Gauss or microtesla. For that, can refer to the datasheet for the appropriate conversion
-    /// factor.
+    /// # Returns
+    /// The magnitude in **raw LSB**. To convert to Gauss, divide this value by
+    /// the sensitivity of your current `Range` setting.
+    ///
+    /// * Range::Gauss2  -> / 15000.0
+    /// * Range::Gauss8  -> / 3750.0
+    /// * Range::Gauss12 -> / 2500.0
+    /// * Range::Gauss30 -> / 1000.0
+    #[cfg(feature = "magnitude")]
     pub async fn read_magnitude(&mut self) -> Result<f32, QmcError<E>> {
         let data = self.read_x_y_z().await?;
         let x = data[0] as f32;
@@ -756,6 +769,7 @@ mod tests {
         i2c.done();
     }
 
+    #[cfg(feature = "magnitude")]
     #[tokio::test]
     async fn test_read_magnitude() {
         //! Test the magnitude calculation by mocking the I2C transactions to return specific X, Y,
