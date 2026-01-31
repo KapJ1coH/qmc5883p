@@ -44,7 +44,8 @@ let config = Qmc5883PConfig::default()
 
 ### Driver Initialization
 
-```rust
+```rust, ignore
+use qmc5883p::Qmc5883p;
 // Initialize the sensor with your I2C peripheral
 let mut sensor = Qmc5883p::new(i2c);
 sensor.init(config).await?;
