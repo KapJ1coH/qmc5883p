@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "qmc5883p"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "defmt",
  "embassy-time",
