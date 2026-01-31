@@ -1,6 +1,6 @@
 [package]
 name = "qmc5883p"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "A platform-agnostic driver for the QMC5883P magnetic sensor."

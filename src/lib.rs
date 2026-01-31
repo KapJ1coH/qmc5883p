@@ -1,10 +1,6 @@
 #![no_std]
-
-//! This module provides an asynchronous driver for the QMC5883P 3-Axis Magnetic Sensor using I2C.
-//! # Hardware Details
-//! * **I2C Address**: `0x2C`
-//! * **Chip ID**: `0x80`
-//! * **Register 0x29**: Used for Axis Sign definition (Undocumented in register map, but described in App Examples).
+#![warn(missing_docs)]
+#![doc = include_str!("../README.md")]
 
 #[cfg(all(feature = "defmt", not(test)))]
 use defmt::{error, info, trace, warn};
@@ -62,13 +58,22 @@ pub enum Mode {
     Continuous = 0b11,
 }
 
+/// Output Data Rate (ODR).
+///
+/// Controls the data update frequency of the sensor.
+/// Higher ODR means more frequent updates but higher power consumption.
+/// (Datasheet Table 17)
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum OutputDataRate {
+    /// 10 Hz Output Data Rate
     Hz10 = 0b00,
+    /// 50 Hz Output Data Rate
     Hz50 = 0b01,
+    /// 100 Hz Output Data Rate
     Hz100 = 0b10,
+    /// 200 Hz Output Data Rate
     Hz200 = 0b11,
 }
 
@@ -80,22 +85,33 @@ pub enum OutputDataRate {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum OverSampleRatio1 {
+    /// OSR = 8. Lowest noise, narrowest bandwidth, highest power consumption.
     Ratio8 = 0b00,
+    /// OSR = 4. Balanced noise and power.
     Ratio4 = 0b01,
+    /// OSR = 2.
     Ratio2 = 0b10,
+    /// OSR = 1. Highest noise, widest bandwidth, lowest power consumption.
     Ratio1 = 0b11,
 }
 
+/// Over Sample Rate 2 (OSR2) - Secondary Filter Bandwidth.
+///
+/// This setting controls the depth of the second-stage internal digital filter.
+/// It is used to further reduce noise (Datasheet Table 17).
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum OverSampleRate {
+    /// OSR2 = 1 (No secondary down-sampling)
     Rate1 = 0b00,
+    /// OSR2 = 2
     Rate2 = 0b01,
+    /// OSR2 = 4
     Rate4 = 0b10,
+    /// OSR2 = 8 (Max filtering, lowest noise)
     Rate8 = 0b11,
 }
-
 /// Magnetic measurement range configuration.
 ///
 /// Defines the full-scale range of the sensor and its corresponding sensitivity.
@@ -126,28 +142,50 @@ impl Range {
     }
 }
 
+/// Soft Reset Control.
+///
+/// Writing `Reset` to this register restores all registers to their default values.
+/// This bit automatically clears itself to `0` after the reset is complete (Datasheet Table 18).
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum SoftReset {
+    /// Triggers a soft reset.
     Reset = 0b1,
+    /// No action.
     NoReset = 0b0,
 }
 
+/// Self-Test Control.
+///
+/// When enabled, an internal current is generated to create a known magnetic field offset.
+/// This allows verification of the signal chain (Datasheet Sec 9.2.3).
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum SelfTest {
+    /// Self-test enabled.
     Enabled = 0b1,
+    /// Self-test disabled (Default).
     Disabled = 0b0,
 }
 
+/// Set/Reset Mode Configuration.
+///
+/// Controls the internal "Set/Reset" strap driver, which is used to degauss the
+/// sensor and correct for offset drift.
+///
+/// * **SetAndResetOn**: Recommended default. Applies a pulse before each measurement to maintain accuracy.
+/// * **SetOnly / SetAndResetOff**: Offset is not renewed during measuring.
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum SetResetMode {
+    /// Disables the Set/Reset driver.
     SetAndResetOff = 0b11,
+    /// Enables only the "Set" pulse.
     SetOnly = 0b01,
+    /// Enables both "Set" and "Reset" pulses (Recommended Default).
     SetAndResetOn = 0b00,
 }
 
@@ -170,13 +208,20 @@ pub enum SetResetMode {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy)]
 pub struct Qmc5883PConfig {
+    /// Operating mode (Suspend, Normal, Single, Continuous).
     pub mode: Mode,
+    /// Output Data Rate (10Hz, 50Hz, 100Hz, 200Hz).
     pub odr: OutputDataRate,
+    /// Measurement Range (2G, 8G, 12G, 30G).
     pub rng: Range,
+    /// Over Sample Ratio 1 (Bandwidth/Noise control).
     pub osr1: OverSampleRatio1,
+    /// Over Sample Rate 2 (Secondary filter).
     pub osr2: OverSampleRate,
+    // Internal fields are usually not documented for the public API unless relevant.
     set_reset: SetResetMode,
-    self_test: SelfTest,
+    /// Self test toggle.
+    self_test: SelfTest
 }
 
 impl Qmc5883PConfig {
@@ -215,6 +260,8 @@ impl Qmc5883PConfig {
         self
     }
 
+    /// Transform Config to byte for the control register 1.
+    #[allow(clippy::let_and_return)]
     pub fn to_control1_byte(self) -> u8 {
         let byte = (self.osr2 as u8) << 6
             | (self.osr1 as u8) << 4
@@ -224,6 +271,8 @@ impl Qmc5883PConfig {
         byte
     }
 
+    /// Transform Config to byte for the control register 2.
+    #[allow(clippy::let_and_return)]
     pub fn to_control2_byte(self) -> u8 {
         let byte = (self.self_test as u8) << 6 | (self.rng as u8) << 2 | (self.set_reset as u8);
         trace!("Control2 Byte: 0b{:08b}", byte);
@@ -246,19 +295,27 @@ impl Default for Qmc5883PConfig {
     }
 }
 
+/// QMC5883P Magnetometer Sensor Driver.
 pub struct Qmc5883p<I> {
     i2c: I,
 }
 
+/// Errors that can occur when interacting with the QMC5883P sensor.
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum QmcError<E> {
+    /// An error occurred on the underlying I2C bus.
     I2c(E),
+    /// The built-in hardware self-test failed (delta values were too small).
     SelfTestFailed,
+    /// Timed out waiting for new data to become ready (DRDY bit).
     DataNotReady,
+    /// The sensor detected a magnetic field overflow (OVFL bit set).
+    /// This usually happens if the range is too small for the environment.
     Overflow,
-    WrongChipId(u8),
-}
+    /// The chip ID read from register 0x00 did not match the expected 0x80.
+    /// Contains the actual ID read.
+    WrongChipId(u8),}
 
 impl<E> From<E> for QmcError<E> {
     fn from(err: E) -> Self {
@@ -266,16 +323,23 @@ impl<E> From<E> for QmcError<E> {
     }
 }
 
-// TODO This will be somewhat re-written in 2.14.1 - Create modular magnetic sensor driver with builder config
-// https://github.com/katkes/SmartParkingDetectionAndNavigation/issues/417
 impl<I, E> Qmc5883p<I>
 where
     I: I2c<Error = E>,
 {
+    /// Create a new driver instance with the given I2C bus.
     pub fn new(i2c: I) -> Self {
         Self { i2c }
     }
 
+    /// Initialize the sensor with the provided configuration.
+    ///
+    /// This method performs the following steps:
+    /// 1. Verifies the Chip ID.
+    /// 2. Performs a soft reset.
+    /// 3. Configures axis signs.
+    /// 4. Applies the configuration (Mode, ODR, Range, OSR).
+    /// 5. Performs a self-test to verify sensor functionality.
     pub async fn init(&mut self, config: Qmc5883PConfig) -> Result<(), QmcError<E>> {
         trace!("Initializing QMC5883P Sensor...");
         self.check_id().await?;
